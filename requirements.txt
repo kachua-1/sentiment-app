@@ -8,6 +8,6 @@ textblob
 matplotlib
 huggingface-hub
 # add this fix 👇
-tf-keras
-# optional: pin keras to a lower version if needed
-keras==2.15.0
+tf-keras==2.15.0
+
+
