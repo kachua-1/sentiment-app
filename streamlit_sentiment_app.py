@@ -1,44 +1,103 @@
-import time
+import streamlit as st
+import traceback
 
-def fetch_google_play_reviews(app_id: str, lang='en', country='us', count=200):
-    st.info(f"Fetching up to {count} reviews for {app_id}...")
-    all_reviews, continuation_token = [], None
-    fetched = 0
-    progress = st.progress(0)
-    total_batches = max(1, count // 200)
-    start_time = time.time()
+# Safe startup
+try:
+    st.set_page_config(layout="wide", page_title="App Reviews Sentiment Explorer")
+except Exception as e:
+    st.error("Startup failed before UI rendered!")
+    st.text(traceback.format_exc())
+    st.stop()
 
-    while fetched < count:
-        batch = min(200, count - fetched)
+st.title("📱 App Reviews — Sentiment Explorer")
+st.caption("Runs your trained model from Hugging Face on Google Play reviews")
+
+# User input section
+app_id = st.text_input("Google Play App ID", "com.whatsapp")
+n_reviews = st.number_input("Number of reviews to fetch", min_value=10, max_value=1000, value=100, step=50)
+run = st.button("Run sentiment analysis")
+
+# --- Only import heavy libraries after button click ---
+if run and app_id:
+    with st.spinner("Loading dependencies... please wait"):
+        import pandas as pd, numpy as np, re, json, time
+        from google_play_scraper import reviews
+        from sentence_transformers import SentenceTransformer
+        from tensorflow.keras.models import load_model
+        from huggingface_hub import hf_hub_download
+        from textblob import TextBlob
+        import nltk
+        nltk.download("punkt", quiet=True)
+        nltk.download("stopwords", quiet=True)
+        nltk.download("wordnet", quiet=True)
+        from nltk.corpus import stopwords
+        from nltk.stem import WordNetLemmatizer
+
+    st.success("✅ Libraries loaded")
+
+    # Load model safely
+    @st.cache_resource
+    def load_huggingface_model():
         try:
-            result, continuation_token = reviews(
-                app_id,
-                lang=lang,
-                country=country,
-                count=batch,
-                continuation_token=continuation_token,
-            )
+            st.info("Downloading model from Hugging Face...")
+            path = hf_hub_download(repo_id="soapmac123/sentiment-model",
+                                   filename="sentiment_model.h5", repo_type="model")
+            model = load_model(path)
+            st.success("Model loaded successfully!")
+            return model
         except Exception as e:
-            st.warning(f"Stopped early due to error: {e}")
-            break
+            st.error(f"Model load failed: {e}")
+            st.text(traceback.format_exc())
+            return None
 
-        if not result:
-            break
-        all_reviews.extend(result)
-        fetched += len(result)
-        progress.progress(min(1.0, fetched / count))
+    model = load_huggingface_model()
+    if model is None:
+        st.stop()
 
-        # stop if too slow (e.g. >90 seconds)
-        if time.time() - start_time > 90:
-            st.warning("⚠️ Fetching took too long — returning partial data.")
-            break
+    # Fetch reviews with timeout + progress
+    def fetch_reviews(app_id, count):
+        from google_play_scraper import reviews
+        all_reviews, token = [], None
+        progress = st.progress(0)
+        start = time.time()
+        while len(all_reviews) < count:
+            batch = min(200, count - len(all_reviews))
+            try:
+                data, token = reviews(app_id, count=batch, continuation_token=token)
+                all_reviews.extend(data)
+                progress.progress(min(1.0, len(all_reviews) / count))
+                if token is None or time.time() - start > 90:
+                    break
+            except Exception as e:
+                st.warning(f"Stopped early: {e}")
+                break
+        progress.empty()
+        return pd.DataFrame(all_reviews)
 
-        if continuation_token is None:
-            break
+    st.info("Fetching reviews...")
+    df = fetch_reviews(app_id, n_reviews)
+    if df.empty:
+        st.error("No reviews fetched.")
+        st.stop()
 
-    progress.empty()
-    if not all_reviews:
-        st.error("No reviews fetched — try a smaller count or different app ID.")
-    else:
-        st.success(f"Fetched {len(all_reviews)} reviews successfully!")
-    return pd.DataFrame(all_reviews)
+    # Preprocess
+    lemma = WordNetLemmatizer()
+    stops = set(stopwords.words("english"))
+    def clean(text):
+        text = re.sub(r"[^a-zA-Z\s]", " ", text.lower())
+        return " ".join([lemma.lemmatize(w) for w in nltk.word_tokenize(text) if w.isalpha() and w not in stops])
+    df["clean"] = df["content"].map(clean)
+
+    # Embeddings and prediction
+    embedder = SentenceTransformer("all-MiniLM-L6-v2")
+    st.info("Generating embeddings...")
+    emb = embedder.encode(df["clean"].tolist(), show_progress_bar=False, batch_size=16)
+    st.info("Running predictions...")
+    preds = model.predict(emb)
+    df["sentiment"] = ["positive" if p >= 0.5 else "negative" for p in preds.squeeze()]
+
+    st.bar_chart(df["sentiment"].value_counts())
+    st.dataframe(df[["userName", "content", "sentiment"]])
+    st.success("✅ Done!")
+else:
+    st.info("Enter an App ID and click 'Run sentiment analysis' to start.")
