@@ -1,0 +1,9 @@
+streamlit
+google-play-scraper
+sentence-transformers
+tensorflow
+scikit-learn
+nltk
+textblob
+matplotlib
+huggingface-hub
