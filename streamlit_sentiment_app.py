@@ -40,7 +40,7 @@ if run and app_id:
     def load_huggingface_model():
         try:
             st.info("Downloading model from Hugging Face...")
-            path = hf_hub_download(repo_id="soapmac123/sentiment-model",
+            path = hf_hub_download(repo_id="soapmac123/sentiment",
                                    filename="sentiment_model.h5", repo_type="model")
             model = load_model(path)
             st.success("Model loaded successfully!")
@@ -101,3 +101,4 @@ if run and app_id:
     st.success("✅ Done!")
 else:
     st.info("Enter an App ID and click 'Run sentiment analysis' to start.")
+
